@@ -2,50 +2,57 @@ import random
 import math
 from collections import defaultdict
 import numpy as np
+import csv
+import os
+from datetime import datetime
 
 class TeamScheduler:
-    def __init__(self, num_teams, num_games, num_tables, rankings=None):
+    def __init__(self, num_teams, games_per_team, num_tables, rankings=None):
         self.X = num_teams
-        self.N = num_games
+        self.games_per_team = games_per_team
         self.T = num_tables
         self.teams = list(range(1, num_teams + 1))
         
-        # If rankings not provided, assume team number = ranking
+        # Calculate total games needed
+        total_matches_needed = (num_teams * games_per_team) // 2
+        self.N = math.ceil(total_matches_needed / num_tables)
+        
         self.rankings = rankings if rankings else {team: team for team in self.teams}
         
         # Algorithm parameters
-        self.k = 0.7  # Ranking tolerance
-        self.max_ranking_diff = 3  # Maximum allowed ranking difference
-        self.consecutive_penalty = 2.0  # Penalty for consecutive games
+        self.k = 0.7
+        self.max_ranking_diff = 3
+        self.consecutive_penalty = 2.0
         
         # Tracking variables
         self.match_history = []
         self.team_match_counts = defaultdict(int)
         self.pair_match_counts = defaultdict(int)
-        self.last_played = defaultdict(list)  # Track when teams last played
+        self.last_played = defaultdict(list)
         
     def calculate_match_probability(self, team1, team2, game_round):
-        """Calculate probability of match between team1 and team2"""
         rank_diff = abs(self.rankings[team1] - self.rankings[team2])
         
-        # Base probability based on ranking difference
         base_prob = math.exp(-rank_diff / self.k)
         
-        # Penalty for recent matches between same pair
         pair_key = tuple(sorted([team1, team2]))
         pair_penalty = math.exp(-self.pair_match_counts[pair_key])
         
-        # Penalty for consecutive games
         consecutive_penalty = 1.0
         if self.last_played[team1] and game_round - self.last_played[team1][-1] <= 1:
             consecutive_penalty /= self.consecutive_penalty
         if self.last_played[team2] and game_round - self.last_played[team2][-1] <= 1:
             consecutive_penalty /= self.consecutive_penalty
             
-        return base_prob * pair_penalty * consecutive_penalty
+        games_penalty = 1.0
+        if self.team_match_counts[team1] >= self.games_per_team:
+            games_penalty *= 0.1
+        if self.team_match_counts[team2] >= self.games_per_team:
+            games_penalty *= 0.1
+            
+        return base_prob * pair_penalty * consecutive_penalty * games_penalty
     
     def get_feasible_pairings(self, game_round, max_ranking_diff=None):
-        """Get all feasible pairings for current round"""
         if max_ranking_diff is None:
             max_ranking_diff = self.max_ranking_diff
             
@@ -55,34 +62,27 @@ class TeamScheduler:
             for j in range(i + 1, len(self.teams)):
                 team1, team2 = self.teams[i], self.teams[j]
                 
-                # Check ranking difference
+                if (self.team_match_counts[team1] >= self.games_per_team or 
+                    self.team_match_counts[team2] >= self.games_per_team):
+                    continue
+                
                 rank_diff = abs(self.rankings[team1] - self.rankings[team2])
                 if rank_diff > max_ranking_diff:
                     continue
                     
-                # Check if teams played recently
-                team1_recent = (self.last_played[team1] and 
-                               game_round - self.last_played[team1][-1] <= 1)
-                team2_recent = (self.last_played[team2] and 
-                               game_round - self.last_played[team2][-1] <= 1)
-                
-                # Allow some flexibility but penalize in probability calculation
                 feasible_pairs.append((team1, team2))
                 
         return feasible_pairs
     
     def select_pairings(self, feasible_pairs, game_round):
-        """Select optimal pairings from feasible pairs"""
         if not feasible_pairs:
             return []
             
-        # Calculate weights for each pair
         weights = []
         for team1, team2 in feasible_pairs:
             weight = self.calculate_match_probability(team1, team2, game_round)
             weights.append(weight)
             
-        # Normalize weights
         total_weight = sum(weights)
         if total_weight == 0:
             probabilities = [1/len(weights)] * len(weights)
@@ -92,30 +92,27 @@ class TeamScheduler:
         return feasible_pairs, probabilities
     
     def generate_schedule(self):
-        """Generate complete schedule"""
         schedule = []
-        used_teams_per_round = set()
         
         for game_round in range(1, self.N + 1):
             print(f"Generating round {game_round}/{self.N}...")
             
             round_matches = []
-            used_teams_this_round = set()
             available_teams = set(self.teams)
             
-            # Try to create T matches for this round
+            available_teams = {team for team in available_teams 
+                             if self.team_match_counts[team] < self.games_per_team}
+            
             for table in range(1, self.T + 1):
                 if len(available_teams) < 2:
                     break
                     
-                # Get feasible pairings with increasing ranking tolerance if needed
                 max_diff = 1
                 selected_pair = None
                 
                 while max_diff <= self.max_ranking_diff and selected_pair is None:
                     feasible_pairs = self.get_feasible_pairings(game_round, max_diff)
                     
-                    # Filter to only available teams
                     feasible_pairs = [
                         (t1, t2) for t1, t2 in feasible_pairs 
                         if t1 in available_teams and t2 in available_teams
@@ -124,7 +121,6 @@ class TeamScheduler:
                     if feasible_pairs:
                         pairs, probs = self.select_pairings(feasible_pairs, game_round)
                         
-                        # Use weighted random selection
                         if pairs:
                             selected_pair = random.choices(pairs, weights=probs, k=1)[0]
                     
@@ -133,42 +129,45 @@ class TeamScheduler:
                 if selected_pair:
                     team1, team2 = selected_pair
                     round_matches.append((team1, team2))
-                    used_teams_this_round.add(team1)
-                    used_teams_this_round.add(team2)
                     available_teams.discard(team1)
                     available_teams.discard(team2)
                     
-                    # Update tracking
                     self.pair_match_counts[tuple(sorted([team1, team2]))] += 1
+                    self.team_match_counts[team1] += 1
+                    self.team_match_counts[team2] += 1
                     self.last_played[team1].append(game_round)
                     self.last_played[team2].append(game_round)
             
             schedule.append(round_matches)
             self.match_history.append(round_matches)
             
+            all_teams_done = all(self.team_match_counts[team] >= self.games_per_team 
+                               for team in self.teams)
+            if all_teams_done:
+                print(f"All teams have played their required games. Stopping at round {game_round}.")
+                break
+            
         return schedule
     
     def print_schedule(self, schedule):
-        """Print the generated schedule"""
         print("\n" + "="*50)
         print("TEAM SCHEDULING RESULTS")
         print("="*50)
+        print(f"Configuration: {self.X} teams, {self.games_per_team} games per team, {self.T} tables")
+        print(f"Total rounds generated: {len(schedule)}")
         
         for round_num, round_matches in enumerate(schedule, 1):
             print(f"\nRound {round_num}:")
             for table_num, match in enumerate(round_matches, 1):
                 team1, team2 = match
                 rank_diff = abs(self.rankings[team1] - self.rankings[team2])
-                print(f"  Table {table_num}: Team {team1} (Rank {self.rankings[team1]}) vs "
-                      f"Team {team2} (Rank {self.rankings[team2]}) | Rank diff: {rank_diff}")
+                print(f"  Table {table_num}: Team {team1} vs Team {team2} | Rank diff: {rank_diff}")
     
     def analyze_schedule(self, schedule):
-        """Analyze the schedule quality"""
         print("\n" + "="*50)
         print("SCHEDULE ANALYSIS")
         print("="*50)
         
-        # Count matches per team
         team_matches = defaultdict(int)
         team_opponents = defaultdict(list)
         
@@ -179,11 +178,11 @@ class TeamScheduler:
                 team_opponents[team1].append(team2)
                 team_opponents[team2].append(team1)
         
-        print(f"\nMatches per team:")
+        print(f"\nMatches per team (target: {self.games_per_team}):")
         for team in sorted(self.teams):
-            print(f"  Team {team} (Rank {self.rankings[team]}): {team_matches[team]} matches")
+            status = "✓" if team_matches[team] == self.games_per_team else "✗"
+            print(f"  Team {team}: {team_matches[team]} matches {status}")
         
-        # Analyze ranking differences
         rank_differences = []
         for round_matches in schedule:
             for team1, team2 in round_matches:
@@ -195,27 +194,79 @@ class TeamScheduler:
         print(f"  Max rank difference: {max(rank_differences)}")
         print(f"  Min rank difference: {min(rank_differences)}")
         
-        # Check for consecutive games
         consecutive_games = 0
         for team in self.teams:
             games = sorted(self.last_played[team])
             for i in range(1, len(games)):
                 if games[i] - games[i-1] == 1:
                     consecutive_games += 1
+                    print(f"  Team {team} played consecutive games in rounds {games[i-1]} and {games[i]}")
         
-        print(f"  Teams playing consecutive games: {consecutive_games} occurrences")
+        print(f"\nTotal consecutive game occurrences: {consecutive_games}")
+    
+    def export_to_csv(self, schedule, filename=None):
+        """Export schedule to CSV file"""
+        if filename is None:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"team_schedule_{timestamp}.csv"
+        
+        try:
+            with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
+                writer = csv.writer(csvfile)
+                
+                # Write header
+                writer.writerow(['Round', 'Table', 'Team 1', 'Team 2', 'Rank Team 1', 'Rank Team 2', 'Rank Difference'])
+                
+                # Write schedule data
+                for round_num, round_matches in enumerate(schedule, 1):
+                    for table_num, match in enumerate(round_matches, 1):
+                        team1, team2 = match
+                        rank1 = self.rankings[team1]
+                        rank2 = self.rankings[team2]
+                        rank_diff = abs(rank1 - rank2)
+                        
+                        writer.writerow([round_num, table_num, f'Team {team1}', f'Team {team2}', rank1, rank2, rank_diff])
+                
+                # Write summary section
+                writer.writerow([])
+                writer.writerow(['SCHEDULE SUMMARY'])
+                writer.writerow(['Total Teams:', self.X])
+                writer.writerow(['Games per Team:', self.games_per_team])
+                writer.writerow(['Tables:', self.T])
+                writer.writerow(['Total Rounds:', len(schedule)])
+                writer.writerow(['Generated on:', datetime.now().strftime("%Y-%m-%d %H:%M:%S")])
+                
+                # Write team matches summary
+                writer.writerow([])
+                writer.writerow(['TEAM MATCHES SUMMARY'])
+                writer.writerow(['Team', 'Matches Played', 'Target'])
+                
+                team_matches = defaultdict(int)
+                for round_matches in schedule:
+                    for team1, team2 in round_matches:
+                        team_matches[team1] += 1
+                        team_matches[team2] += 1
+                
+                for team in sorted(self.teams):
+                    writer.writerow([f'Team {team}', team_matches[team], self.games_per_team])
+            
+            print(f"\n✓ Schedule successfully exported to: {filename}")
+            print(f"✓ File location: {os.path.abspath(filename)}")
+            return filename
+            
+        except Exception as e:
+            print(f"\n✗ Error exporting to CSV: {e}")
+            return None
 
 def get_user_input():
-    """Get all required inputs from the user"""
     print("="*60)
     print("TEAM SCHEDULING SYSTEM")
     print("="*60)
     
-    # Get basic parameters
     while True:
         try:
             num_teams = int(input("\nEnter number of teams (X): "))
-            num_games = int(input("Enter number of games (N): "))
+            games_per_team = int(input("Enter number of games PER TEAM: "))
             num_tables = int(input("Enter number of tables (T): "))
             
             if num_teams < 2:
@@ -225,15 +276,18 @@ def get_user_input():
                 print("Error: Not enough teams for the number of tables")
                 print(f"With {num_tables} tables, you need at least {num_tables * 2} teams")
                 continue
-            if num_games < 1:
-                print("Error: Need at least 1 game")
+            if games_per_team < 1:
+                print("Error: Each team should play at least 1 game")
                 continue
+                
+            total_matches = (num_teams * games_per_team) // 2
+            min_rounds = math.ceil(total_matches / num_tables)
+            print(f"Note: This will require approximately {min_rounds} rounds")
                 
             break
         except ValueError:
             print("Error: Please enter valid numbers")
     
-    # Get ranking method
     print("\nRanking options:")
     print("1. Use team numbers as rankings (Team 1 = Rank 1, Team 2 = Rank 2, etc.)")
     print("2. Enter custom rankings")
@@ -250,13 +304,10 @@ def get_user_input():
     
     rankings = {}
     if ranking_choice == 1:
-        # Use team numbers as rankings
         rankings = {team: team for team in range(1, num_teams + 1)}
         print("Using team numbers as rankings")
     else:
-        # Get custom rankings
         print(f"\nEnter rankings for each team (1 = best, {num_teams} = worst)")
-        print("Teams with similar rankings will play against each other")
         
         for team in range(1, num_teams + 1):
             while True:
@@ -270,12 +321,10 @@ def get_user_input():
                 except ValueError:
                     print("Please enter a valid number")
         
-        # Show ranking summary
         print("\nTeam rankings summary:")
         for team in sorted(rankings.keys()):
             print(f"  Team {team}: Rank {rankings[team]}")
     
-    # Get algorithm parameters
     print("\nAlgorithm Parameters (press Enter for default values):")
     
     try:
@@ -292,41 +341,40 @@ def get_user_input():
         penalty_value = 2.0
         print("Using default value 2.0")
     
-    return num_teams, num_games, num_tables, rankings, k_value, penalty_value
+    return num_teams, games_per_team, num_tables, rankings, k_value, penalty_value
 
 def main():
-    """Main function to run the scheduling system"""
     try:
-        # Get user input
-        num_teams, num_games, num_tables, rankings, k_value, penalty_value = get_user_input()
+        num_teams, games_per_team, num_tables, rankings, k_value, penalty_value = get_user_input()
         
-        # Create scheduler
-        scheduler = TeamScheduler(num_teams, num_games, num_tables, rankings)
+        scheduler = TeamScheduler(num_teams, games_per_team, num_tables, rankings)
         scheduler.k = k_value
         scheduler.consecutive_penalty = penalty_value
         
-        # Generate schedule
         print("\n" + "="*50)
         print("GENERATING SCHEDULE...")
         print("="*50)
         
         schedule = scheduler.generate_schedule()
         
-        # Display results
         scheduler.print_schedule(schedule)
         scheduler.analyze_schedule(schedule)
+        
+        # Export to CSV
+        csv_file = scheduler.export_to_csv(schedule)
         
         # Option to regenerate
         while True:
             regenerate = input("\nGenerate a different schedule with same parameters? (y/n): ").lower()
             if regenerate == 'y':
                 print("\nGenerating new schedule...")
-                scheduler = TeamScheduler(num_teams, num_games, num_tables, rankings)
+                scheduler = TeamScheduler(num_teams, games_per_team, num_tables, rankings)
                 scheduler.k = k_value
                 scheduler.consecutive_penalty = penalty_value
                 schedule = scheduler.generate_schedule()
                 scheduler.print_schedule(schedule)
                 scheduler.analyze_schedule(schedule)
+                csv_file = scheduler.export_to_csv(schedule)  # Export the new schedule too
             elif regenerate == 'n':
                 break
             else:
