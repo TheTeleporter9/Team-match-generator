@@ -205,20 +205,137 @@ class TeamScheduler:
         
         print(f"  Teams playing consecutive games: {consecutive_games} occurrences")
 
-# Example usage
-if __name__ == "__main__":
-    # Example 1: Basic usage with default rankings
-    print("EXAMPLE 1: 8 teams, 5 games, 2 tables")
-    scheduler1 = TeamScheduler(num_teams=8, num_games=5, num_tables=2)
-    schedule1 = scheduler1.generate_schedule()
-    scheduler1.print_schedule(schedule1)
-    scheduler1.analyze_schedule(schedule1)
+def get_user_input():
+    """Get all required inputs from the user"""
+    print("="*60)
+    print("TEAM SCHEDULING SYSTEM")
+    print("="*60)
     
-    # Example 2: Custom rankings
-    print("\n\n" + "="*80)
-    print("EXAMPLE 2: 6 teams with custom rankings, 4 games, 2 tables")
-    custom_rankings = {1: 1, 2: 3, 3: 2, 4: 4, 5: 5, 6: 6}  # Team: Ranking
-    scheduler2 = TeamScheduler(num_teams=6, num_games=4, num_tables=2, rankings=custom_rankings)
-    schedule2 = scheduler2.generate_schedule()
-    scheduler2.print_schedule(schedule2)
-    scheduler2.analyze_schedule(schedule2)
+    # Get basic parameters
+    while True:
+        try:
+            num_teams = int(input("\nEnter number of teams (X): "))
+            num_games = int(input("Enter number of games (N): "))
+            num_tables = int(input("Enter number of tables (T): "))
+            
+            if num_teams < 2:
+                print("Error: Need at least 2 teams")
+                continue
+            if num_tables * 2 > num_teams:
+                print("Error: Not enough teams for the number of tables")
+                print(f"With {num_tables} tables, you need at least {num_tables * 2} teams")
+                continue
+            if num_games < 1:
+                print("Error: Need at least 1 game")
+                continue
+                
+            break
+        except ValueError:
+            print("Error: Please enter valid numbers")
+    
+    # Get ranking method
+    print("\nRanking options:")
+    print("1. Use team numbers as rankings (Team 1 = Rank 1, Team 2 = Rank 2, etc.)")
+    print("2. Enter custom rankings")
+    
+    while True:
+        try:
+            ranking_choice = int(input("Choose ranking method (1 or 2): "))
+            if ranking_choice in [1, 2]:
+                break
+            else:
+                print("Please enter 1 or 2")
+        except ValueError:
+            print("Please enter 1 or 2")
+    
+    rankings = {}
+    if ranking_choice == 1:
+        # Use team numbers as rankings
+        rankings = {team: team for team in range(1, num_teams + 1)}
+        print("Using team numbers as rankings")
+    else:
+        # Get custom rankings
+        print(f"\nEnter rankings for each team (1 = best, {num_teams} = worst)")
+        print("Teams with similar rankings will play against each other")
+        
+        for team in range(1, num_teams + 1):
+            while True:
+                try:
+                    rank = int(input(f"Enter ranking for Team {team}: "))
+                    if 1 <= rank <= num_teams:
+                        rankings[team] = rank
+                        break
+                    else:
+                        print(f"Ranking must be between 1 and {num_teams}")
+                except ValueError:
+                    print("Please enter a valid number")
+        
+        # Show ranking summary
+        print("\nTeam rankings summary:")
+        for team in sorted(rankings.keys()):
+            print(f"  Team {team}: Rank {rankings[team]}")
+    
+    # Get algorithm parameters
+    print("\nAlgorithm Parameters (press Enter for default values):")
+    
+    try:
+        k_input = input(f"Ranking tolerance [default: 0.7] (lower = stricter): ")
+        k_value = float(k_input) if k_input.strip() else 0.7
+    except ValueError:
+        k_value = 0.7
+        print("Using default value 0.7")
+    
+    try:
+        penalty_input = input(f"Consecutive game penalty [default: 2.0] (higher = stricter): ")
+        penalty_value = float(penalty_input) if penalty_input.strip() else 2.0
+    except ValueError:
+        penalty_value = 2.0
+        print("Using default value 2.0")
+    
+    return num_teams, num_games, num_tables, rankings, k_value, penalty_value
+
+def main():
+    """Main function to run the scheduling system"""
+    try:
+        # Get user input
+        num_teams, num_games, num_tables, rankings, k_value, penalty_value = get_user_input()
+        
+        # Create scheduler
+        scheduler = TeamScheduler(num_teams, num_games, num_tables, rankings)
+        scheduler.k = k_value
+        scheduler.consecutive_penalty = penalty_value
+        
+        # Generate schedule
+        print("\n" + "="*50)
+        print("GENERATING SCHEDULE...")
+        print("="*50)
+        
+        schedule = scheduler.generate_schedule()
+        
+        # Display results
+        scheduler.print_schedule(schedule)
+        scheduler.analyze_schedule(schedule)
+        
+        # Option to regenerate
+        while True:
+            regenerate = input("\nGenerate a different schedule with same parameters? (y/n): ").lower()
+            if regenerate == 'y':
+                print("\nGenerating new schedule...")
+                scheduler = TeamScheduler(num_teams, num_games, num_tables, rankings)
+                scheduler.k = k_value
+                scheduler.consecutive_penalty = penalty_value
+                schedule = scheduler.generate_schedule()
+                scheduler.print_schedule(schedule)
+                scheduler.analyze_schedule(schedule)
+            elif regenerate == 'n':
+                break
+            else:
+                print("Please enter 'y' or 'n'")
+                
+    except KeyboardInterrupt:
+        print("\n\nProgram interrupted by user")
+    except Exception as e:
+        print(f"\nAn error occurred: {e}")
+
+if __name__ == "__main__":
+    main()
